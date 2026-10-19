@@ -15,6 +15,7 @@ use litellm_inference_chat::{
     stream::{ChatCompletionsStream, ChatStreamCall, ReportedUsage},
     types::ChatCompletionsCall,
 };
+use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use serde_json::{Map, Value};
 
 use litellm_gateway_hooks::Route;
@@ -160,7 +161,7 @@ async fn handle(
                         route.machine(call, cache_options.policy),
                         (),
                         cache_headers,
-                        litellm_host_http::Unary::new(Json),
+                        litellm_host_http::Unary::new(completion),
                         None,
                     )
                     .await?)
@@ -176,6 +177,20 @@ async fn handle(
         Some(tracking) => tracking.finish(routed).await,
         None => routed,
     }
+}
+
+/// A translated answer as the client gets it. The provider config leaves `id` out, since
+/// Python mints it on its own `ModelResponse`; the gateway is that host here, so it mints the
+/// `chatcmpl-` id and names the object, as Python's response does.
+fn completion(response: ChatCompletionsResponse) -> Json<Value> {
+    let mut body = match serde_json::to_value(response) {
+        Ok(Value::Object(body)) => body,
+        _ => Map::new(),
+    };
+    body.entry("id")
+        .or_insert_with(|| format!("chatcmpl-{}", uuid::Uuid::new_v4()).into());
+    body.insert("object".into(), "chat.completion".into());
+    Json(Value::Object(body))
 }
 
 /// The `messages` array and the remaining optional params of a chat request.
